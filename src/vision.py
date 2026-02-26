@@ -33,6 +33,7 @@ from scipy.signal import savgol_filter
 import planning
 import config
 from camera import Camera
+import normalize
 
 
 # ===============================
@@ -172,6 +173,18 @@ def webcam_vector():
             )
             if frame is None:
                 break
+
+            debug = frame.copy()
+            h0, w0 = debug.shape[:2]
+            cv2.putText(debug,
+                        f"Crop Size: {w0} x {h0}",
+                        (20, 30),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.8,
+                        (0, 0, 255),
+                        2)
+            cv2.imshow("Crop Debug", debug)
+
         else:
             frame = frozen_frame.copy()
 
@@ -297,13 +310,29 @@ def webcam_vector():
 
                 paths = simplified
 
-                plan = planning.build_plan(paths)
-                preview = planning.render_plan(plan, (h, w))
+                norm_paths = normalize.normalize_paths(paths, w, h)
 
-                cv2.imshow("Vector", preview)
+                preview_paths = []
+                for p in norm_paths:
+                    p2 = p.copy()
+
+                    if config.ORIGIN == "BOTTOM_LEFT":
+                        p2[:, 1] = config.PAPER_H_MM - p2[:, 1]
+
+                    p2[:, 0] = (p2[:, 0] / config.PAPER_W_MM) * w
+                    p2[:, 1] = (p2[:, 1] / config.PAPER_H_MM) * h
+
+                    preview_paths.append(p2)
+
+                plan_preview = planning.build_plan(preview_paths)
+                preview = planning.render_plan(plan_preview, (h, w))
+
+                cv2.imshow("Normalize Preview (MM)", preview)
                 cv2.waitKey(0)
 
-                ordered_paths = [step.path for step in plan if step.pen == "DOWN"]
+                plan = planning.build_plan(norm_paths)
+
+                ordered_paths = [step.path for step in plan_preview if step.pen == "DOWN"]
                 paths = ordered_paths
 
                 mode = "DRAWING"
