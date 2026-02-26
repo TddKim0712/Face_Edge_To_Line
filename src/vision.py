@@ -2,19 +2,20 @@
 ## 2026 SIOR spring 홍보부스용
 ## edited: 02/26/2026
 
-# YOLO model -> face segmentation, background removal,edge detection
-# edge to vector lines
+# YOLO model -> face segmentation, background removal,only needed edge detection
+# pure contour extraction (minimal filtering)
+# contour to vector lines
 
 ## Input:
 # Webcam live frames
 
 # ## 과정:
 # 1. 사람 클래스 (cls == 0) masking
-# 2. masking 된 영역에서만 edge
-# 3. Skeleton Thinning (1 pixel 두께로 선 만들기)
-# 4. Endpoint Tracing (1개의 neighbor 탐색 후 방향 따라가기), branch에서는 dot product로 직진 우선
-# 5. smoothing (Savitzky–Golay Filter), already includes MovingWindow, PolyFit
-#
+# 2. masking 된 영역에서만 edge (Canny 기반, 저강도)
+# 3. 외곽 contour 추출 (cv2.findContours)
+# 4. smoothing (Savitzky–Golay Filter), already includes MovingWindow, PolyFit
+# 5. RDP 기반 벡터 단순화
+
 # ## 상태머신:
 # LIVE → (space) → DRAWING
 # DRAWING → (space 강제완료) → PAUSE
