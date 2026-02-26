@@ -7,7 +7,7 @@
 # contour to vector lines
 
 ## Input:
-# Webcam live frames
+# Adjusted Webcam live frames
 
 # ## 과정:
 # 1. 사람 클래스 (cls == 0) masking
@@ -31,6 +31,8 @@ import numpy as np
 from ultralytics import YOLO
 from scipy.signal import savgol_filter
 import planning
+import config
+from camera import Camera
 
 
 # ===============================
@@ -123,11 +125,7 @@ def contour_paths(edge_img, min_len, smooth_win):
 def webcam_vector():
 
     model = YOLO("../models/yolov8n-seg.pt")
-    cap = cv2.VideoCapture(0)
-
-    if not cap.isOpened():
-        print("Camera open failed")
-        return
+    cam = Camera()
 
     cv2.namedWindow("Vector Control")
 
@@ -168,8 +166,11 @@ def webcam_vector():
     while True:
 
         if mode == "LIVE":
-            ret, frame = cap.read()
-            if not ret:
+            frame = cam.get_frame(
+                config.PAPER_W_MM,
+                config.PAPER_H_MM
+            )
+            if frame is None:
                 break
         else:
             frame = frozen_frame.copy()
@@ -202,9 +203,7 @@ def webcam_vector():
         gray = cv2.GaussianBlur(gray, (blur_k, blur_k), 0)
 
         edges = cv2.Canny(gray, 50, 120)
-
         edges_person = cv2.bitwise_and(edges, edges, mask=combined_mask)
-
         edges_person = remove_small_components(edges_person, cc_min_area)
 
         sketch = np.ones((h, w), dtype=np.uint8) * 255
@@ -318,5 +317,7 @@ def webcam_vector():
             elif mode == "PAUSE":
                 mode = "LIVE"
 
-    cap.release()
+    cam.release()
     cv2.destroyAllWindows()
+
+    return paths
