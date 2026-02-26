@@ -25,7 +25,6 @@
 # Stroke = np.array([[x,y], [x,y], ...])
 # 한 프레임에서 추출된 모든 연속 선들의 벡터 목록이 아웃풋
 
-
 import cv2
 import numpy as np
 from ultralytics import YOLO
@@ -33,7 +32,27 @@ from scipy.signal import savgol_filter
 import planning
 
 
+# ===============================
+# Default Parameters
+
+DEFAULT_LAPLACIAN_KSIZE = 3
+DEFAULT_LAPLACIAN_THRESH = 35
+
+DEFAULT_BLUR_KERNEL = 3
+
+DEFAULT_MORPH_K = 3
+DEFAULT_OPEN_ITERS = 1
+DEFAULT_CLOSE_ITERS = 0
+
+DEFAULT_CC_MIN_AREA = 80
+
+DEFAULT_MIN_PATH_LEN = 40
+DEFAULT_SMOOTH_WIN = 7
+
+DEFAULT_RDP_EPS = 2
+
 DRAW_SPEED = 8
+# ===============================
 
 
 def smooth_polyline(points, win):
@@ -54,73 +73,48 @@ def smooth_polyline(points, win):
     return np.vstack((x_s, y_s)).T
 
 
-def skeleton_paths(edge_img, min_len, smooth_win):
+def rdp_simplify(points, eps):
+    if points is None or len(points) < 3:
+        return points
 
-    skel = cv2.ximgproc.thinning(edge_img)
+    cnt = points.reshape(-1, 1, 2).astype(np.float32)
+    approx = cv2.approxPolyDP(cnt, eps, False)
+    return approx.reshape(-1, 2).astype(np.float32)
 
-    h, w = skel.shape
-    visited = np.zeros_like(skel, dtype=bool)
+
+def remove_small_components(bin_img, min_area):
+    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(bin_img, connectivity=8)
+    out = np.zeros_like(bin_img)
+
+    for lab in range(1, num_labels):
+        area = stats[lab, cv2.CC_STAT_AREA]
+        if area >= min_area:
+            out[labels == lab] = 255
+
+    return out
+
+
+def contour_paths(edge_img, min_len, smooth_win):
+
+    contours, _ = cv2.findContours(
+        edge_img,
+        cv2.RETR_EXTERNAL,
+        cv2.CHAIN_APPROX_NONE
+    )
+
     paths = []
 
-    def neighbors(y, x):
-        pts = []
-        for dy in [-1, 0, 1]:
-            for dx in [-1, 0, 1]:
-                if dy == 0 and dx == 0:
-                    continue
-                ny, nx = y + dy, x + dx
-                if 0 <= ny < h and 0 <= nx < w and skel[ny, nx] > 0:
-                    pts.append((ny, nx))
-        return pts
+    for cnt in contours:
 
-    endpoints = []
-    for y in range(h):
-        for x in range(w):
-            if skel[y, x] > 0:
-                if len(neighbors(y, x)) == 1:
-                    endpoints.append((y, x))
-
-    for sy, sx in endpoints:
-
-        if visited[sy, sx]:
+        if len(cnt) < min_len:
             continue
 
-        path = []
-        cy, cx = sy, sx
-        prev_dir = None
+        pts = cnt.reshape(-1, 2).astype(np.float32)
 
-        while True:
-
-            visited[cy, cx] = True
-            path.append((cx, cy))
-
-            nbs = neighbors(cy, cx)
-            candidates = [(ny, nx) for ny, nx in nbs if not visited[ny, nx]]
-
-            if not candidates:
-                break
-
-            if prev_dir is not None:
-                best = None
-                best_dot = -1e9
-                for ny, nx in candidates:
-                    dy = ny - cy
-                    dx = nx - cx
-                    dot = dx * prev_dir[0] + dy * prev_dir[1]
-                    if dot > best_dot:
-                        best_dot = dot
-                        best = (ny, nx)
-                ny, nx = best
-            else:
-                ny, nx = candidates[0]
-
-            prev_dir = (nx - cx, ny - cy)
-            cy, cx = ny, nx
-
-        if len(path) > min_len:
-            pts = np.array(path, dtype=np.float32)
+        if len(pts) > 20:
             pts = smooth_polyline(pts, smooth_win)
-            paths.append(pts)
+
+        paths.append(pts)
 
     return paths
 
@@ -135,11 +129,32 @@ def webcam_vector():
         return
 
     cv2.namedWindow("Vector Control")
-    cv2.createTrackbar("Canny Low", "Vector Control", 50, 200, lambda x: None)
-    cv2.createTrackbar("Canny High", "Vector Control", 120, 300, lambda x: None)
-    cv2.createTrackbar("Blur Kernel", "Vector Control", 5, 15, lambda x: None)
-    cv2.createTrackbar("Min Path Len", "Vector Control", 40, 200, lambda x: None)
-    cv2.createTrackbar("Smooth Win", "Vector Control", 9, 25, lambda x: None)
+
+    cv2.createTrackbar("Lap KSize", "Vector Control",
+                       DEFAULT_LAPLACIAN_KSIZE, 7, lambda x: None)
+    cv2.createTrackbar("Lap Thresh", "Vector Control",
+                       DEFAULT_LAPLACIAN_THRESH, 120, lambda x: None)
+
+    cv2.createTrackbar("Blur Kernel", "Vector Control",
+                       DEFAULT_BLUR_KERNEL, 15, lambda x: None)
+
+    cv2.createTrackbar("Morph K", "Vector Control",
+                       DEFAULT_MORPH_K, 15, lambda x: None)
+    cv2.createTrackbar("Open Iters", "Vector Control",
+                       DEFAULT_OPEN_ITERS, 5, lambda x: None)
+    cv2.createTrackbar("Close Iters", "Vector Control",
+                       DEFAULT_CLOSE_ITERS, 5, lambda x: None)
+
+    cv2.createTrackbar("CC MinArea", "Vector Control",
+                       DEFAULT_CC_MIN_AREA, 400, lambda x: None)
+
+    cv2.createTrackbar("Min Path Len", "Vector Control",
+                       DEFAULT_MIN_PATH_LEN, 250, lambda x: None)
+    cv2.createTrackbar("Smooth Win", "Vector Control",
+                       DEFAULT_SMOOTH_WIN, 25, lambda x: None)
+
+    cv2.createTrackbar("RDP Eps", "Vector Control",
+                       DEFAULT_RDP_EPS, 10, lambda x: None)
 
     mode = "LIVE"
     frozen_frame = None
@@ -160,21 +175,16 @@ def webcam_vector():
 
         h, w, _ = frame.shape
 
-        canny_low = cv2.getTrackbarPos("Canny Low", "Vector Control")
-        canny_high = cv2.getTrackbarPos("Canny High", "Vector Control")
         blur_k = cv2.getTrackbarPos("Blur Kernel", "Vector Control")
+        cc_min_area = cv2.getTrackbarPos("CC MinArea", "Vector Control")
         min_len = cv2.getTrackbarPos("Min Path Len", "Vector Control")
         smooth_win = cv2.getTrackbarPos("Smooth Win", "Vector Control")
+        rdp_eps = cv2.getTrackbarPos("RDP Eps", "Vector Control")
 
         if blur_k % 2 == 0:
             blur_k += 1
-        if blur_k < 3:
-            blur_k = 3
-
-        if smooth_win % 2 == 0:
-            smooth_win += 1
-        if smooth_win < 5:
-            smooth_win = 5
+        if blur_k < 1:
+            blur_k = 1
 
         results = model(frame, verbose=False)[0]
         combined_mask = np.zeros((h, w), dtype=np.uint8)
@@ -188,9 +198,13 @@ def webcam_vector():
                     combined_mask = cv2.bitwise_or(combined_mask, mask)
 
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        blur = cv2.GaussianBlur(gray, (blur_k, blur_k), 0)
-        edges = cv2.Canny(blur, canny_low, canny_high)
+        gray = cv2.GaussianBlur(gray, (blur_k, blur_k), 0)
+
+        edges = cv2.Canny(gray, 50, 120)
+
         edges_person = cv2.bitwise_and(edges, edges, mask=combined_mask)
+
+        edges_person = remove_small_components(edges_person, cc_min_area)
 
         sketch = np.ones((h, w), dtype=np.uint8) * 255
         sketch[edges_person > 0] = 0
@@ -199,9 +213,9 @@ def webcam_vector():
         vector_canvas = np.ones((h, w, 3), dtype=np.uint8) * 255
 
         if mode in ["DRAWING", "PAUSE"]:
-            
+
             total_paths = len(paths)
-            
+
             if force_finish:
                 draw_path_idx = total_paths
                 draw_point_idx = 0
@@ -216,9 +230,9 @@ def webcam_vector():
                               2)
 
             if mode == "DRAWING" and draw_path_idx < total_paths:
+
                 p = paths[draw_path_idx]
 
-                # prevent overflow 
                 if draw_point_idx >= len(p):
                     draw_point_idx = len(p) - 1
 
@@ -231,14 +245,15 @@ def webcam_vector():
                             0.5,
                             (0, 0, 0),
                             1)
-                
+
                 cv2.putText(vector_canvas,
-                f"Total Paths: {total_paths}",
-                (20, 30),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.8,
-                (0, 0, 0),
-                2)
+                            f"Total Paths: {total_paths}",
+                            (20, 30),
+                            cv2.FONT_HERSHEY_SIMPLEX,
+                            0.8,
+                            (0, 0, 0),
+                            2)
+
                 if draw_point_idx < len(p) - 1:
                     pts = p[:draw_point_idx].astype(np.int32)
 
@@ -271,7 +286,16 @@ def webcam_vector():
             if mode == "LIVE":
 
                 frozen_frame = frame.copy()
-                paths = skeleton_paths(edges_person, min_len, smooth_win)
+
+                raw_paths = contour_paths(edges_person, min_len, smooth_win)
+
+                simplified = []
+                for p in raw_paths:
+                    p2 = rdp_simplify(p, rdp_eps)
+                    if p2 is not None and len(p2) >= 2:
+                        simplified.append(p2)
+
+                paths = simplified
 
                 plan = planning.build_plan(paths)
                 preview = planning.render_plan(plan, (h, w))
@@ -279,7 +303,6 @@ def webcam_vector():
                 cv2.imshow("Vector", preview)
                 cv2.waitKey(0)
 
-                # preview 보여준 뒤, 실제 DRAWING에 planning 결과 반영
                 ordered_paths = [step.path for step in plan if step.pen == "DOWN"]
                 paths = ordered_paths
 
