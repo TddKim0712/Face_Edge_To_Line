@@ -1,7 +1,38 @@
+## 펜 플로터 머신 vision.py
+## 2026 SIOR spring 홍보부스용
+## edited: 02/26/2026
+
+# YOLO model -> face segmentation, background removal,edge detection
+# edge to vector lines
+
+## Input:
+# Webcam live frames
+
+# ## 과정:
+# 1. 사람 클래스 (cls == 0) masking
+# 2. masking 된 영역에서만 edge
+# 3. Skeleton Thinning (1 pixel 두께로 선 만들기)
+# 4. Endpoint Tracing (1개의 neighbor 탐색 후 방향 따라가기), branch에서는 dot product로 직진 우선
+# 5. smoothing (Savitzky–Golay Filter), already includes MovingWindow, PolyFit
+#
+# ## 상태머신:
+# LIVE → (space) → DRAWING
+# DRAWING → (space 강제완료) → PAUSE
+# PAUSE → (space) → LIVE
+
+## output:
+# List[Stroke]
+# Stroke = np.array([[x,y], [x,y], ...])
+# 한 프레임에서 추출된 모든 연속 선들의 벡터 목록이 아웃풋
+
+
 import cv2
 import numpy as np
 from ultralytics import YOLO
 from scipy.signal import savgol_filter
+
+
+DRAW_SPEED = 8
 
 
 # ---------------------------
@@ -26,7 +57,7 @@ def smooth_polyline(points, win):
 
 
 # ---------------------------
-# Skeleton → Path extraction
+# Skeleton → Path extraction (Endpoint Tracing)
 # ---------------------------
 def skeleton_paths(edge_img, min_len, smooth_win):
 
@@ -37,37 +68,64 @@ def skeleton_paths(edge_img, min_len, smooth_win):
     paths = []
 
     def neighbors(y, x):
+        pts = []
         for dy in [-1, 0, 1]:
             for dx in [-1, 0, 1]:
                 if dy == 0 and dx == 0:
                     continue
                 ny, nx = y + dy, x + dx
                 if 0 <= ny < h and 0 <= nx < w and skel[ny, nx] > 0:
-                    yield ny, nx
+                    pts.append((ny, nx))
+        return pts
 
+    endpoints = []
     for y in range(h):
         for x in range(w):
-            if skel[y, x] and not visited[y, x]:
+            if skel[y, x] > 0:
+                if len(neighbors(y, x)) == 1:
+                    endpoints.append((y, x))
 
-                stack = [(y, x)]
-                path = []
+    for sy, sx in endpoints:
 
-                while stack:
-                    cy, cx = stack.pop()
-                    if visited[cy, cx]:
-                        continue
+        if visited[sy, sx]:
+            continue
 
-                    visited[cy, cx] = True
-                    path.append((cx, cy))
+        path = []
+        cy, cx = sy, sx
+        prev_dir = None
 
-                    for ny, nx in neighbors(cy, cx):
-                        if not visited[ny, nx]:
-                            stack.append((ny, nx))
+        while True:
 
-                if len(path) > min_len:
-                    pts = np.array(path, dtype=np.float32)
-                    pts = smooth_polyline(pts, smooth_win)
-                    paths.append(pts)
+            visited[cy, cx] = True
+            path.append((cx, cy))
+
+            nbs = neighbors(cy, cx)
+            candidates = [(ny, nx) for ny, nx in nbs if not visited[ny, nx]]
+
+            if not candidates:
+                break
+
+            if prev_dir is not None:
+                best = None
+                best_dot = -1e9
+                for ny, nx in candidates:
+                    dy = ny - cy
+                    dx = nx - cx
+                    dot = dx * prev_dir[0] + dy * prev_dir[1]
+                    if dot > best_dot:
+                        best_dot = dot
+                        best = (ny, nx)
+                ny, nx = best
+            else:
+                ny, nx = candidates[0]
+
+            prev_dir = (nx - cx, ny - cy)
+            cy, cx = ny, nx
+
+        if len(path) > min_len:
+            pts = np.array(path, dtype=np.float32)
+            pts = smooth_polyline(pts, smooth_win)
+            paths.append(pts)
 
     return paths
 
@@ -77,7 +135,7 @@ def skeleton_paths(edge_img, min_len, smooth_win):
 # ---------------------------
 def webcam_vector():
 
-    model = YOLO("yolov8n-seg.pt")
+    model = YOLO("../models/yolov8n-seg.pt")
     cap = cv2.VideoCapture(0)
 
     if not cap.isOpened():
@@ -97,6 +155,7 @@ def webcam_vector():
 
     draw_path_idx = 0
     draw_point_idx = 0
+    force_finish = False
 
     while True:
 
@@ -109,7 +168,6 @@ def webcam_vector():
 
         h, w, _ = frame.shape
 
-        # ---- parameters ----
         canny_low = cv2.getTrackbarPos("Canny Low", "Vector Control")
         canny_high = cv2.getTrackbarPos("Canny High", "Vector Control")
         blur_k = cv2.getTrackbarPos("Blur Kernel", "Vector Control")
@@ -126,7 +184,6 @@ def webcam_vector():
         if smooth_win < 5:
             smooth_win = 5
 
-        # ---- YOLO ----
         results = model(frame, verbose=False)[0]
         combined_mask = np.zeros((h, w), dtype=np.uint8)
 
@@ -138,7 +195,6 @@ def webcam_vector():
                     mask = (mask > 0.5).astype(np.uint8) * 255
                     combined_mask = cv2.bitwise_or(combined_mask, mask)
 
-        # ---- Edge ----
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         blur = cv2.GaussianBlur(gray, (blur_k, blur_k), 0)
         edges = cv2.Canny(blur, canny_low, canny_high)
@@ -148,21 +204,20 @@ def webcam_vector():
         sketch[edges_person > 0] = 0
         sketch_color = cv2.cvtColor(sketch, cv2.COLOR_GRAY2BGR)
 
-        # ---- Path extraction once ----
-        if mode == "PAUSED":
-            paths = skeleton_paths(edges_person, min_len, smooth_win)
-            mode = "DRAWING"
-            draw_path_idx = 0
-            draw_point_idx = 1
-
-        # ---- Vector Canvas ----
         vector_canvas = np.ones((h, w, 3), dtype=np.uint8) * 255
 
-        if mode == "DRAWING":
+        if mode in ["DRAWING", "PAUSE"]:
 
             total_paths = len(paths)
 
-            # 1️⃣ 이미 그린 path (검은색)
+            # 강제 종료 처리
+            if force_finish:
+                draw_path_idx = total_paths
+                draw_point_idx = 0
+                force_finish = False
+                mode = "PAUSE"
+
+            # 완료된 path
             for i in range(draw_path_idx):
                 cv2.polylines(vector_canvas,
                               [paths[i].astype(np.int32)],
@@ -170,8 +225,8 @@ def webcam_vector():
                               (0, 0, 0),
                               2)
 
-            # 2️⃣ 현재 그리고 있는 path (회색)
-            if draw_path_idx < total_paths:
+            # 현재 진행 path
+            if mode == "DRAWING" and draw_path_idx < total_paths:
                 p = paths[draw_path_idx]
 
                 if draw_point_idx < len(p):
@@ -186,10 +241,8 @@ def webcam_vector():
 
                     cx, cy = p[draw_point_idx - 1].astype(int)
 
-                    # 붓 표시
                     cv2.circle(vector_canvas, (cx, cy), 6, (50, 50, 50), -1)
 
-                    # 붓에 번호 표시
                     cv2.putText(vector_canvas,
                                 str(draw_path_idx + 1),
                                 (cx + 5, cy - 5),
@@ -198,13 +251,14 @@ def webcam_vector():
                                 (0, 0, 0),
                                 1)
 
-                    draw_point_idx += 2
-
+                    draw_point_idx += DRAW_SPEED
                 else:
                     draw_path_idx += 1
                     draw_point_idx = 1
 
-            # 3️⃣ 화면에 총 개수 표시
+            if draw_path_idx >= total_paths:
+                mode = "PAUSE"
+
             cv2.putText(vector_canvas,
                         f"Total Paths: {total_paths}",
                         (20, 30),
@@ -213,7 +267,6 @@ def webcam_vector():
                         (0, 0, 0),
                         2)
 
-        # ---- display ----
         cv2.imshow("Camera", frame)
         cv2.imshow("Sketch", sketch_color)
         cv2.imshow("Vector", vector_canvas)
@@ -224,11 +277,20 @@ def webcam_vector():
             break
 
         if key == ord(" "):
-            frozen_frame = frame.copy()
-            mode = "PAUSED"
 
-        if key == ord("r"):
-            mode = "LIVE"
+            if mode == "LIVE":
+                frozen_frame = frame.copy()
+                paths = skeleton_paths(edges_person, min_len, smooth_win)
+                mode = "DRAWING"
+                draw_path_idx = 0
+                draw_point_idx = 1
+                force_finish = False
+
+            elif mode == "DRAWING":
+                force_finish = True
+
+            elif mode == "PAUSE":
+                mode = "LIVE"
 
     cap.release()
     cv2.destroyAllWindows()
