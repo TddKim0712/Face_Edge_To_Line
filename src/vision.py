@@ -39,7 +39,7 @@ import normalize
 # ===============================
 # Default Parameters
 
-DEFAULT_LAPLACIAN_KSIZE = 3
+DEFAULT_LAPLACIAN_KSIZE = 2
 DEFAULT_LAPLACIAN_THRESH = 35
 
 DEFAULT_BLUR_KERNEL = 3
@@ -48,14 +48,14 @@ DEFAULT_MORPH_K = 3
 DEFAULT_OPEN_ITERS = 1
 DEFAULT_CLOSE_ITERS = 0
 
-DEFAULT_CC_MIN_AREA = 80
+DEFAULT_CC_MIN_AREA = 50
 
 DEFAULT_MIN_PATH_LEN = 40
 DEFAULT_SMOOTH_WIN = 7
 
 DEFAULT_RDP_EPS = 2
 
-DRAW_SPEED = 8
+DRAW_SPEED = 10
 # ===============================
 
 
@@ -311,6 +311,17 @@ def webcam_vector():
                 paths = simplified
 
                 norm_paths = normalize.normalize_paths(paths, w, h)
+
+                ### vision_postprocess part 
+                import vision_postprocess
+                norm_paths = vision_postprocess.postprocess_paths(
+                    norm_paths,
+                    min_poly_length=5.0,
+                    min_segment_length=0.3,
+                    angle_thresh_deg=5.0,
+                    resample_spacing=0.4
+                )
+
 
                 preview_paths = []
                 for p in norm_paths:
