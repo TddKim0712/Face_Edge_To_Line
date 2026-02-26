@@ -7,3 +7,15 @@
 # 데모이므로 현재는 시리얼통신이나 아두이노 관련 코드 X
 # gcode 변환 필요
 # S curve 연산
+
+## Entry Point
+
+import vision
+
+
+def main():
+    vision.webcam_vector()
+
+
+if __name__ == "__main__":
+    main()

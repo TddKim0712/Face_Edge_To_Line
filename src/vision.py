@@ -30,14 +30,12 @@ import cv2
 import numpy as np
 from ultralytics import YOLO
 from scipy.signal import savgol_filter
+import planning
 
 
 DRAW_SPEED = 8
 
 
-# ---------------------------
-# Polyline smoothing
-# ---------------------------
 def smooth_polyline(points, win):
     if len(points) < win:
         return points
@@ -56,9 +54,6 @@ def smooth_polyline(points, win):
     return np.vstack((x_s, y_s)).T
 
 
-# ---------------------------
-# Skeleton → Path extraction (Endpoint Tracing)
-# ---------------------------
 def skeleton_paths(edge_img, min_len, smooth_win):
 
     skel = cv2.ximgproc.thinning(edge_img)
@@ -130,9 +125,6 @@ def skeleton_paths(edge_img, min_len, smooth_win):
     return paths
 
 
-# ---------------------------
-# Main
-# ---------------------------
 def webcam_vector():
 
     model = YOLO("../models/yolov8n-seg.pt")
@@ -207,17 +199,15 @@ def webcam_vector():
         vector_canvas = np.ones((h, w, 3), dtype=np.uint8) * 255
 
         if mode in ["DRAWING", "PAUSE"]:
-
+            
             total_paths = len(paths)
-
-            # 강제 종료 처리
+            
             if force_finish:
                 draw_path_idx = total_paths
                 draw_point_idx = 0
                 force_finish = False
                 mode = "PAUSE"
 
-            # 완료된 path
             for i in range(draw_path_idx):
                 cv2.polylines(vector_canvas,
                               [paths[i].astype(np.int32)],
@@ -225,11 +215,31 @@ def webcam_vector():
                               (0, 0, 0),
                               2)
 
-            # 현재 진행 path
             if mode == "DRAWING" and draw_path_idx < total_paths:
                 p = paths[draw_path_idx]
 
-                if draw_point_idx < len(p):
+                # prevent overflow 
+                if draw_point_idx >= len(p):
+                    draw_point_idx = len(p) - 1
+
+                cx, cy = p[draw_point_idx].astype(int)
+
+                cv2.putText(vector_canvas,
+                            str(draw_path_idx + 1),
+                            (cx + 5, cy - 5),
+                            cv2.FONT_HERSHEY_SIMPLEX,
+                            0.5,
+                            (0, 0, 0),
+                            1)
+                
+                cv2.putText(vector_canvas,
+                f"Total Paths: {total_paths}",
+                (20, 30),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.8,
+                (0, 0, 0),
+                2)
+                if draw_point_idx < len(p) - 1:
                     pts = p[:draw_point_idx].astype(np.int32)
 
                     if len(pts) > 1:
@@ -239,33 +249,13 @@ def webcam_vector():
                                       (150, 150, 150),
                                       2)
 
-                    cx, cy = p[draw_point_idx - 1].astype(int)
-
-                    cv2.circle(vector_canvas, (cx, cy), 6, (50, 50, 50), -1)
-
-                    cv2.putText(vector_canvas,
-                                str(draw_path_idx + 1),
-                                (cx + 5, cy - 5),
-                                cv2.FONT_HERSHEY_SIMPLEX,
-                                0.5,
-                                (0, 0, 0),
-                                1)
-
                     draw_point_idx += DRAW_SPEED
                 else:
                     draw_path_idx += 1
-                    draw_point_idx = 1
+                    draw_point_idx = 0
 
             if draw_path_idx >= total_paths:
                 mode = "PAUSE"
-
-            cv2.putText(vector_canvas,
-                        f"Total Paths: {total_paths}",
-                        (20, 30),
-                        cv2.FONT_HERSHEY_SIMPLEX,
-                        0.8,
-                        (0, 0, 0),
-                        2)
 
         cv2.imshow("Camera", frame)
         cv2.imshow("Sketch", sketch_color)
@@ -279,8 +269,20 @@ def webcam_vector():
         if key == ord(" "):
 
             if mode == "LIVE":
+
                 frozen_frame = frame.copy()
                 paths = skeleton_paths(edges_person, min_len, smooth_win)
+
+                plan = planning.build_plan(paths)
+                preview = planning.render_plan(plan, (h, w))
+
+                cv2.imshow("Vector", preview)
+                cv2.waitKey(0)
+
+                # preview 보여준 뒤, 실제 DRAWING에 planning 결과 반영
+                ordered_paths = [step.path for step in plan if step.pen == "DOWN"]
+                paths = ordered_paths
+
                 mode = "DRAWING"
                 draw_path_idx = 0
                 draw_point_idx = 1
@@ -294,7 +296,3 @@ def webcam_vector():
 
     cap.release()
     cv2.destroyAllWindows()
-
-
-if __name__ == "__main__":
-    webcam_vector()
