@@ -158,7 +158,8 @@ def webcam_vector():
 
     mode = "LIVE"
     frozen_frame = None
-    paths = []
+    paths = []      # 픽셀 좌표 – OpenCV 시각화 전용
+    mm_paths = []   # mm 좌표  – gcode.py 출력용
 
     draw_path_idx = 0
     draw_point_idx = 0
@@ -343,8 +344,10 @@ def webcam_vector():
 
                 plan = planning.build_plan(norm_paths)
 
-                ordered_paths = [step.path for step in plan_preview if step.pen == "DOWN"]
-                paths = ordered_paths
+                # 픽셀 좌표 → OpenCV 애니메이션 시각화용
+                paths = [step.path for step in plan_preview if step.pen == "DOWN"]
+                # mm 좌표 → gcode.py 출력용
+                mm_paths = [step.path for step in plan if step.pen == "DOWN"]
 
                 mode = "DRAWING"
                 draw_path_idx = 0
@@ -360,4 +363,4 @@ def webcam_vector():
     cam.release()
     cv2.destroyAllWindows()
 
-    return paths
+    return mm_paths
