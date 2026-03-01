@@ -94,6 +94,53 @@ main.py
 
 ---
 
+## Supported Commands (G-Code)
+
+현재 생성되는 G-code는 GRBL / CNC 호환 최소 스펙을 기반으로 한다.
+
+- G21 → mm 단위 사용
+
+- G90 → 절대 좌표 모드
+
+- G0 X.. Y.. → Pen UP 이동
+
+- G1 X.. Y.. → Pen DOWN 이동
+
+- M3 → Pen DOWN
+
+- M5 → Pen UP
+
+## Motion Policy
+
+- Pen UP 상태에서 이동 → G0
+
+- Pen DOWN 상태에서 이동 → G1
+
+- 모든 좌표는 mm 단위
+
+- 절대 좌표계 (G90) 사용
+
+- Feedrate는 향후 config 분리 예정
+
+### Example Output
+
+아래는 사각형을 그리는 간단한 예시이다.
+
+
+<code>G21
+G90
+M5
+G0 X10 Y10
+M3
+G1 X30 Y10
+G1 X30 Y30
+G1 X10 Y30
+M5</code>
+
+
+
+---
+
 ## How to Execute?
 
 1. 카메라 연결
@@ -119,3 +166,4 @@ main.py
 - 실시간 시리얼 전송
 - 다중 레이어 드로잉
 - Z축 제어 개선
+
