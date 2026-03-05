@@ -39,7 +39,7 @@ def send_gcode(filename):
 
     ser = serial_manager.get_serial()
 
-    with open(filename) as f:
+    with open(filename, encoding="utf-8") as f:
         lines = f.readlines()
 
     wait_ready()
