@@ -22,7 +22,7 @@ camera
 
 import vision
 import gcode
-from hardware import serial_sender, calibration_collector
+import hardware.serial_sender as ss, hardware.calibration_collector as cc
 
 
 MODE = "CALIBRATION"
@@ -36,7 +36,7 @@ def main():
 
     if MODE == "CALIBRATION":
 
-        calibration_collector.run_collector()
+        cc.run_collector()
         return
 
 
@@ -53,7 +53,7 @@ def main():
             filename=GCODE_FILE
         )
 
-        serial_sender.send_gcode(GCODE_FILE)
+        ss.send_gcode(GCODE_FILE)
 
 
 if __name__ == "__main__":

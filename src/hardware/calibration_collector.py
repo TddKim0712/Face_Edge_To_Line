@@ -2,7 +2,7 @@
 ## joystick calibration data collector
 
 import csv
-import serial_manager
+from hardware import serial_manager
 
 
 def run_collector():

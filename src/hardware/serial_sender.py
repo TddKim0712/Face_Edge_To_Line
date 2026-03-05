@@ -16,7 +16,7 @@ Arduino firmware 조건
 ## serial_sender.py
 ## G-code streaming
 
-import serial_manager
+from hardware import serial_manager
 
 
 def wait_ready():
