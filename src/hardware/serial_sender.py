@@ -1,17 +1,17 @@
 ## 펜 플로터 머신 serial_sender.py
 ## 2026 SIOR spring 홍보부스용
-## edited: 03/05/2026
+## edited: 03/08/2026
 
 ## serial_sender
-## G-code 전송 전용 모듈 + 실시간 시각화
-## arduino UNO 사용
-# Digital Pin 2,3,4,5 / 6,7,8,9 / 10,11,12,13 --> 각각 corresponding to X,Y,Z stepper motor drive IN(1,2,3,4)
+## 극좌표 G-code 전송 + 실시간 시각화
+## arduino UNO + L293D Motor Shield
 
 """
-PC → Arduino G-code streaming
+PC → Arduino 극좌표 G-code streaming
 
 Arduino firmware 조건
     각 명령 처리 후 'ok' 응답
+    축: R(반지름 mm), A(각도 deg), Z(펜)
 """
 
 import cv2
@@ -21,39 +21,48 @@ from hardware import serial_manager
 
 
 # ================================================================
-#  LiveView: G-code 실행 중 실시간 시각화
+#  LiveView: 극좌표 G-code 실행 중 실시간 시각화
 # ================================================================
 
 class LiveView:
     """
-    Arduino에 G-code를 전송하면서 동시에 OpenCV 창에
-    지금 어떤 경로(Path)의 어떤 점(Point)을 그리고 있는지 표시합니다.
+    Arduino에 극좌표 G-code를 전송하면서 동시에 OpenCV 창에
+    원형 종이 위에 그려지는 모습을 표시합니다.
 
-    vision.py의 DRAWING 모드와 비슷한 시각화.
+    polar.py의 polar_preview와 비슷한 시각화.
     """
 
     def __init__(self, total_paths=0):
 
-        # 캔버스 크기 (mm → px 변환)
-        self.scale = 3.0
-        margin = 20
-        self.margin = margin
-        self.cw = int(config.MACHINE_W_MM * self.scale) + margin * 2
-        self.ch = int(config.MACHINE_H_MM * self.scale) + margin * 2 + 40  # 상단 상태바 공간
+        # 종이 반지름 (mm)
+        self.paper_r_mm = min(config.PAPER_W_MM, config.PAPER_H_MM) / 2
 
-        # 그려진 선 (영구 레이어)
-        self.canvas = np.ones((self.ch, self.cw, 3), dtype=np.uint8) * 255
+        # 캔버스 설정
+        self.canvas_size = 600
+        self.status_h = 50
+        self.total_h = self.canvas_size + self.status_h
+        margin = 40
 
-        # 종이 영역 표시
-        p1 = self._mm2px(config.PAPER_OFFSET_X_MM, config.PAPER_OFFSET_Y_MM)
-        p2 = self._mm2px(
-            config.PAPER_OFFSET_X_MM + config.PAPER_W_MM,
-            config.PAPER_OFFSET_Y_MM + config.PAPER_H_MM
-        )
-        cv2.rectangle(self.canvas, p1, p2, (200, 170, 140), 1)
+        self.draw_r_px = (self.canvas_size - 2 * margin) // 2
+
+        # 캔버스 중심
+        self.ccx = self.canvas_size // 2
+        self.ccy = self.status_h + self.canvas_size // 2
+
+        # 기본 캔버스 (원형 종이)
+        self.base = np.ones((self.total_h, self.canvas_size, 3), dtype=np.uint8) * 220
+
+        # 종이 그림자 + 채우기 + 테두리 + 중심 핀
+        cv2.circle(self.base, (self.ccx, self.ccy), self.draw_r_px + 4, (190, 180, 165), -1)
+        cv2.circle(self.base, (self.ccx, self.ccy), self.draw_r_px, (248, 243, 233), -1)
+        cv2.circle(self.base, (self.ccx, self.ccy), self.draw_r_px, (150, 120, 80), 2)
+        cv2.circle(self.base, (self.ccx, self.ccy), 3, (120, 120, 120), -1)
+
+        self.drawn = self.base.copy()
 
         # 상태
-        self.pos = (0.0, 0.0)
+        self.cur_r = 0.0    # mm
+        self.cur_a = 0.0    # degrees
         self.pen_down = False
         self.path_num = 0
         self.total_paths = total_paths
@@ -62,10 +71,14 @@ class LiveView:
         cv2.namedWindow("Plotter Live", cv2.WINDOW_AUTOSIZE)
 
 
-    def _mm2px(self, x_mm, y_mm):
-        """mm 좌표 → OpenCV 픽셀 (Y 반전)"""
-        px = int(x_mm * self.scale) + self.margin
-        py = self.ch - self.margin - int(y_mm * self.scale)
+    def _polar2px(self, r_mm, a_deg):
+        """극좌표 (r mm, a degrees) → OpenCV 픽셀"""
+        scale = self.draw_r_px / self.paper_r_mm
+        a_rad = np.radians(a_deg)
+        x_mm = r_mm * np.cos(a_rad)
+        y_mm = r_mm * np.sin(a_rad)
+        px = int(self.ccx + x_mm * scale)
+        py = int(self.ccy - y_mm * scale)
         return (px, py)
 
 
@@ -87,13 +100,14 @@ class LiveView:
             return
 
         # 파라미터 파싱
-        new_x, new_y = self.pos
+        new_r = self.cur_r
+        new_a = self.cur_a
         new_z = None
         for token in upper[1:]:
-            if token[0] == "X":
-                new_x = float(token[1:])
-            elif token[0] == "Y":
-                new_y = float(token[1:])
+            if token[0] == "R":
+                new_r = float(token[1:])
+            elif token[0] == "A":
+                new_a = float(token[1:])
             elif token[0] == "Z":
                 new_z = float(token[1:])
 
@@ -102,49 +116,66 @@ class LiveView:
             was_down = self.pen_down
             self.pen_down = (new_z <= 1.0)
             if self.pen_down and not was_down:
-                self.point_count = 0          # 새 경로 시작
+                self.point_count = 0
 
         # 그리기 (펜 내린 상태에서 이동할 때만)
-        if self.pen_down and (new_x, new_y) != self.pos:
+        if self.pen_down and (new_r != self.cur_r or new_a != self.cur_a):
             self.point_count += 1
-            p1 = self._mm2px(*self.pos)
-            p2 = self._mm2px(new_x, new_y)
-            cv2.line(self.canvas, p1, p2, (0, 0, 0), 2)
+            p1 = self._polar2px(self.cur_r, self.cur_a)
+            p2 = self._polar2px(new_r, new_a)
+            cv2.line(self.drawn, p1, p2, (30, 30, 30), 2, cv2.LINE_AA)
 
-        self.pos = (new_x, new_y)
+        self.cur_r = new_r
+        self.cur_a = new_a
         self._show()
 
 
     def _show(self):
 
-        display = self.canvas.copy()
+        display = self.drawn.copy()
 
-        # ── 현재 위치 마커 ────────────────────────────────────────
-        px, py = self._mm2px(*self.pos)
+        # 종이 테두리
+        cv2.circle(display, (self.ccx, self.ccy), self.draw_r_px, (150, 120, 80), 2)
+
+        # 펜 축 (고정 수평선)
+        cv2.line(display,
+                 (self.ccx - self.draw_r_px - 15, self.ccy),
+                 (self.ccx + self.draw_r_px + 15, self.ccy),
+                 (180, 180, 180), 1, cv2.LINE_AA)
+
+        # 현재 위치 마커
+        cur_px = self._polar2px(self.cur_r, self.cur_a)
         if self.pen_down:
-            cv2.circle(display, (px, py), 5, (0, 0, 255), -1)      # 빨강 = 그리는 중
+            cv2.circle(display, cur_px, 5, (0, 0, 255), -1)       # 빨강 = 그리는 중
         else:
-            cv2.circle(display, (px, py), 5, (255, 100, 0), -1)     # 파랑 = 이동 중
+            cv2.circle(display, cur_px, 5, (255, 100, 0), -1)      # 파랑 = 이동 중
+
+        # 펜 위치 (수평 축 위)
+        scale = self.draw_r_px / self.paper_r_mm
+        pen_px = int(self.ccx + min(self.cur_r, self.paper_r_mm) * scale)
+        cv2.circle(display, (pen_px, self.ccy), 5, (255, 120, 30), -1)
+
+        # 중심 핀
+        cv2.circle(display, (self.ccx, self.ccy), 3, (100, 100, 100), -1)
 
         # ── 상단 상태바 ───────────────────────────────────────────
-        cv2.rectangle(display, (0, 0), (self.cw, 36), (40, 40, 40), -1)
+        cv2.rectangle(display, (0, 0), (self.canvas_size, self.status_h), (35, 35, 35), -1)
 
         state = "DRAWING" if self.pen_down else "MOVING"
+        line1 = f"Path {self.path_num}/{self.total_paths}  |  Point {self.point_count}  |  {state}"
+        cv2.putText(display, line1, (12, 22),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.50, (255, 255, 255), 1)
 
-        text = f"Path {self.path_num}/{self.total_paths}  |  Point {self.point_count}  |  {state}"
-        cv2.putText(display, text, (10, 24),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1)
-
-        coord = f"X={self.pos[0]:.1f}  Y={self.pos[1]:.1f}"
-        cv2.putText(display, coord, (self.cw - 200, 24),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (180, 180, 180), 1)
+        line2 = f"r={self.cur_r:.1f}mm  a={self.cur_a:.1f}deg"
+        cv2.putText(display, line2, (12, 42),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.45, (130, 220, 130), 1)
 
         cv2.imshow("Plotter Live", display)
         cv2.waitKey(1)
 
 
     def close(self):
-        cv2.waitKey(0)           # 완료 후 아무 키나 누를 때까지 결과 표시
+        cv2.waitKey(0)
         cv2.destroyWindow("Plotter Live")
 
 
@@ -206,10 +237,16 @@ def send_gcode(filename):
             if resp == "ok":
                 break
 
+            if resp.startswith("ok"):
+                break
+
             if resp.startswith("error"):
                 print("[error]", resp)
                 viz.close()
                 return
+
+            if resp:
+                print("[arduino]", resp)
 
         # ok 받은 후 → 시각화 업데이트
         viz.on_command(cmd)

@@ -6,7 +6,7 @@
 # ===============================
 # Serial Configuration
 
-SERIAL_PORT = "COM15"
+SERIAL_PORT = "COM13"
 SERIAL_BAUD = 115200
 SERIAL_TIMEOUT = 2
 
