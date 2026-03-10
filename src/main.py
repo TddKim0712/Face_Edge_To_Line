@@ -22,10 +22,11 @@ camera
 
 import vision
 import gcode
-import face_edge_line.src.hardware.serial_sender_viewer as ss, hardware.calibration_collector as cc
+import polar
+import hardware.serial_sender as ss, hardware.calibration_collector as cc
 
 
-#MODE = "CALIBRATION"
+# MODE = "CALIBRATION"
 MODE = "DRAW"
 
 
@@ -48,10 +49,11 @@ def main():
             print("no paths")
             return
 
-        gcode.generate_gcode(
-            paths,
-            filename=GCODE_FILE
-        )
+        # 극좌표 시각화 (원형 종이 회전 + 펜 이동 애니메이션)
+        polar.polar_preview(paths)
+
+        # 극좌표 G-code 생성
+        polar.generate_polar_gcode(paths, filename=GCODE_FILE)
 
         ss.send_gcode(GCODE_FILE)
 
