@@ -1,6 +1,6 @@
 ## 펜 플로터 머신 main.py
 ## 2026 SIOR spring 홍보부스용
-## edited: 02/28/2026
+## edited: 03/05/2026
 
 ## Entry Point
 # 1. 웹캠으로 얼굴 벡터 추출 (mm 좌표)
@@ -22,11 +22,11 @@ camera
 
 import vision
 import gcode
-import hardware.serial_sender as ss, hardware.calibration_collector as cc
+import face_edge_line.src.hardware.serial_sender_viewer as ss, hardware.calibration_collector as cc
 
 
-MODE = "CALIBRATION"
-# MODE = "DRAW"
+#MODE = "CALIBRATION"
+MODE = "DRAW"
 
 
 GCODE_FILE = "robot_drawing.gcode"

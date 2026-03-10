@@ -7,6 +7,9 @@
 ## arduino UNO 사용
 # Digital Pin 2,3,4,5 / 6,7,8,9 / 10,11,12,13 --> 각각 corresponding to X,Y,Z stepper motor drive IN(1,2,3,4)
 
+
+## viewer 기능 추가
+## 창 띄워서 매 실제 모터 움직임마다 기대하는 드로잉 결과를 화면에서 송출
 """
 PC → Arduino G-code streaming
 
@@ -22,7 +25,7 @@ from hardware import serial_manager
 
 # ================================================================
 #  LiveView: G-code 실행 중 실시간 시각화
-# ================================================================
+
 
 class LiveView:
     """
